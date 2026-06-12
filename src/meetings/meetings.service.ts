@@ -142,6 +142,20 @@ export class MeetingsService {
       }
     }
 
+    // Get creator's email to add as invitee
+    const { data: creator, error: creatorError } = await this.supabaseAdmin
+      .from('users')
+      .select('email')
+      .eq('id', creatorId)
+      .eq('role', 'creator')
+      .single();
+
+    if (creatorError || !creator) {
+      this.logger.warn(
+        `Failed to fetch creator email for ${creatorId}: ${creatorError?.message || 'Creator not found'}`,
+      );
+    }
+
     // 2. Create Meeting in Zoom
     const zoomPayload: CreateZoomMeetingDto = {
       topic,
@@ -149,15 +163,21 @@ export class MeetingsService {
       duration,
       type: 2, // Scheduled
       timezone: 'UTC',
+      password: 'vadhjvfvsd',
       settings: {
         host_video: true,
         participant_video: true,
-        join_before_host: false,
+        join_before_host: true,
         mute_upon_entry: true,
         auto_recording: 'cloud',
         approval_type: 0,
         registration_type: 1,
-        meeting_authentication: true,
+        meeting_authentication: false,
+        waiting_room: false,
+        // Add creator's email as invitee if available
+        ...(creator?.email && {
+          meeting_invitees: [{ email: creator.email }],
+        }),
       },
     };
 
@@ -387,10 +407,19 @@ export class MeetingsService {
       if (!isNaN(zoomIdNum)) {
         try {
           await this.zoomService.deleteMeeting(zoomIdNum);
+          // Host will be released automatically by deleteMeeting
         } catch (e) {
           this.logger.warn(
             `Failed to delete from Zoom (might be already deleted): ${e}`,
           );
+          // If delete failed, still try to release the host
+          try {
+            await this.zoomService.releaseHost(meetingTyped.meeting_id);
+          } catch (releaseError) {
+            this.logger.warn(
+              `Failed to release host for meeting ${meetingTyped.meeting_id}: ${releaseError}`,
+            );
+          }
         }
       }
     }
